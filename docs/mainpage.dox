@@ -1,0 +1,112 @@
+/** @mainpage Projeto final - Projeto em Automação e Robótica Industrial
+
+@section intro_sec Objetivos
+
+A realização deste projeto tem como objetivo o desenvolvimento de uma interface em GTK que permite a comunicação com um sistema remoto estabelecido pelo aluno.
+A comunicação tem de ser estabelecida usando um protocolo padrão de comunicação (Rs232, TCP/IP, ...). O seu desenvolvimento obriga à utilização da ferramenta GTK, linguagem C e ambiente linux.\n
+Na documentação elaborada, vários pontos de interesse serão abordados, de modo a apresentar de forma clara o trabalho realizado.
+
+
+
+
+
+@section project Projeto desenvolvido
+
+O projeto foi desenvolvido no âmbito da unidade curricular de PARI e consiste num sistema de videovigilância. 
+Este compreende a aquisição de imagem pelo sistema remoto, o seu envio para o cliente e a sua posterior apresentação numa interface gráfica. 
+Através da interação com a interface, é permitido ao utilizador a introdução das dimensões da próxima imagem a apresentar.
+Desta forma, é possível selecionar uma determinada área de interesse, para observar com mais detalhe.\n
+Para o projeto em questão, apenas foi tida em conta
+uma câmara, no entanto, a ampliação do trabalho realizado permite a construção de um sistema de vigilância a larga escala. \n
+
+
+
+
+
+@subsection exerc_sec Sistema remoto
+
+O sistema remoto utilizado é um Raspberry Pi 4, modelo B, com 4GB de RAM.
+Para a sua utilização, foi instalado o Raspbian como sistema operativo. Este liga-se a um Access point, que partilha o Wi-fi a que está conectado, uma vez que a ligação à Eduroam é bastante complicada. Desta forma, conhecendo o seu IP, a interação com raspberry é realizada com recurso ao VncViewer, por este permitir a fácil visualização da sua interface gráfica remotamente.\n
+
+O programa a executar neste sistema foi uma adaptação do servidor TCP/IP testado nas aulas. Esta adaptação permite o estabelecimento da ligação, no entanto, o protocolo de comunicação em si foi desenvolvido para o projeto em questão.\n
+Após o estabelecimento da ligação, o servidor encontra-se à espera de mensagens provenientes do cliente. 
+	- Assim que recebe uma mensagem, processa-a e com base nas informações retiradas, fica responsável pela captura de uma imagem  e pelo seu processamento, caso seja esse o caso.
+	- Uma vez que o envio do ponteiro para a IplImage não é exequível, este decompõe a imagem recebida e envia os dados em dois pacotes distintos.
+	- Em primeiro lugar, é enviado um pacote com as dimensões da imagem em questão, isto é, alguns dos campos da estrutura IplImage (Width, Height, depth, nChannels, widthStep). 
+	- De seguida, caso o cliente receba a informação anterior, são enviados os dados associados à imagem, campo imageData, da estrutura referida anteriormente.\n
+
+Para a aquisição e o processamento da imagem  foi necessária a instalação da biblioteca OpenCv, utilizada nas aulas práticas, no servidor remoto. 
+
+@image html rasp1.jpg width=300px
+
+
+
+
+
+
+@subsection imp_sec Arquitetura do programa
+
+O programa principal do projeto em questão encontra-se dividido em dois processos. Mediante o uso da função fork(), é criado um processo Pai e um processo Filho. 
+Esta divisão de processos é realizada no ficheiro main.c. 
+
+- <b> Processo Pai </b>\n
+O processo pai, processo responsável pela gestão das comunicações, estabelece a ligação TCP/IP com o sistema remoto. Este fica encarregue da receção e do envio das mensagens. 
+
+- <b> Processo Filho </b>\n
+Por outro lado, o processo filho encarrega-se da apresentação da interface gráfica e da atualização da imagem apresentada nesta, consoante a informação recebida pelo processo pai. 
+
+- <b> Memória partilhada </b>\n
+Desta forma, de modo a proceder à partilha de informação entre os dois processos, é utilizada uma shared memory. Esta consiste num segmento de memória a que ambos têm acesso. Neste programa, esta consiste numa estrutura do tipo Image.
+	- Esta estrutura apresenta diversos campos que consistem em carateríticas da imagem partilhada.
+	- Os primeiros cinco campos consistem nas informações recolhidas pela interface gráfica gerida pelo processo filho (x0,y0,w,h,manda). 
+	- Estas são partilhadas com o processo pai para poderem ser enviadas ao servidor.
+	- Desta forma, este saberá quais as caraterísticas da próxima imagem que terá de enviar. 
+	- Por outro lado, os restantes campos consistem nos dados da imagem capturada pelo sistema remoto (width,height,nChannels,depth,widthStep,imageData).
+	- Estes dados são recebidos pelo processo pai.
+	- No entanto, terão ser partilhados com o filho de forma a ser possível reconstruir a imagem e apresentá-la na interface gráfica.
+
+- <b> Comunicação por sinais </b>\n 
+No entanto, ambos os processos também comunicam por sinais, uma vez que, consiste numa forma eficiente de avisar o outro processo do acontecimento de um evento. 
+Como será explicado à frente, o processo filho enviará periodicamente sinais ao processo pai, para este enviar uma mensagem ao servidor. 
+
+@image html estrutura11.png width=700px
+
+
+
+
+
+
+
+@subsection int_sec Interface gráfica
+
+Como já foi referido, a interface gráfica foi desenvolvida em GTK. Esta incorpora três janelas. 
+- A janela principal permite a apresentação da imagem adquirida, numa drawing area.
+	- De modo a que a imagem possa ser atualizada continuamente, foi estabelecido um timeout, com  recurso à função <b> gtk_timeout_add() </b>. 
+	- A cada intervalo de 50 ms, é executada a função responsável pela atualização da drawing area referida, UpdateDisplay().
+	- Para além disso, a drawing area apresenta uma callback associada ao evento draw, on_mydrawingareasingle_draw().
+	- Desta forma, sempre que esta atualização é efetuada, o processo filho envia um sinal ao proceso pai.
+	- O processo pai, assim que o recebe, envia uma mensagem ao servidor, com as dimensões requeridas para a próxima imagem a apresentar.
+	- Ao receber a resposta do servidor, partilha-a na shared memory, á qual o processo filho tem acesso.
+	- Desta forma, este reconstroi os dados recebidos e apresenta a imagem na interface. 
+
+- Através do clique sobre o botão "Sobre" é apresentada uma janela com o âmbito do trabalho realizado. 
+- Ao clicar sobre o botão "Propriedades", surge uma nova janela com funcionalidades adicionais. 
+	- Através do preenchimento dos campos apresentados, é possível pré-visualizar a zona a recortar através do clique no botão correspondente;
+	- Apenas, ao carregar em Aplicar, acontece o recorte definitivo da imagem. Caso os dados introduzidos sejam válidos, estes são guardados na shared memory, à qual o processo pai tem acesso. Caso contrário, é apresentado um aviso indicando que as dimensões introduzidas não são possíveis.
+	- Caso queira apresentar de novo a imagem com as dimensões originais, é clicar no botão respetivo. Com esta ação, os valores partilhados na shared memory serão nulos. 
+ 	- Nos dois casos apresentados, os respetivos dados serão enviados para o servidor que responderá com uma nova imagem com as dimensões requeridas. 
+	- No último caso, o servidor processará a mensagem e reconhecerá os dados nulos, pelo que não efetuará o recorte da imagem.\n
+
+
+As funções associadas a interações com a interface gráfica encontram-se descritas no ficheiro callbacks.c.
+
+
+@image html janelaprinc.png width=450px\n
+@image html janelaProp.png width=450px
+
+<b> Realizado por: </b> \n
+ 
+Mafalda Gonçalves, nº80645
+
+
+ */
